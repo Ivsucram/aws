@@ -334,7 +334,7 @@ def test_mlp(
         n_epochs = original_epochs
         
         while epoch_counter < n_epochs and this_validation_errors > 0:
-            train_set_x_with_distortion = theano.shared(np.asarray(create_distortion_dataset, dtype=theano.config.floatX))
+            train_set_x_with_distortion = theano.shared(np.asarray(create_distortion_dataset(), dtype=theano.config.floatX))
             train_model_distortion = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
                     updates=updates,
                     givens={
@@ -830,7 +830,7 @@ def test_dark_knowledge(
         n_epochs = original_epochs
         
         while epoch_counter < n_epochs and this_validation_errors > 0:
-            train_set_x_with_distortion = theano.shared(np.asarray(create_distortion_dataset, dtype=theano.config.floatX))            
+            train_set_x_with_distortion = theano.shared(np.asarray(create_distortion_dataset(), dtype=theano.config.floatX))            
             train_model_distortion = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
                 updates=updates,
                 givens={
