@@ -190,15 +190,12 @@ def elastic_distortion(input, x):
     
 def create_distortion_dataset():
     dataset = 'data/mnist_batches.npz'
-    epoch = len(os.walk('distort').next()[2]) + 1
-    
     mnist = np.load(dataset)
+
     train_set_x = mnist['train_data']
     mnist = None
     for i in xrange(len(train_set_x)):
         train_set_x[i] = elastic_distortion(input=train_set_x[i], x=np.random.choice(9, 1, p=[0.03, 0.03, 0.04, 0.1, 0.1, 0.1, 0.2, 0.2, 0.2])[0])
-    
-    return train_set_x
 
 def test_mlp(
         initial_learning_rate,
@@ -334,7 +331,7 @@ def test_mlp(
         n_epochs = original_epochs
         
         while epoch_counter < n_epochs and this_validation_errors > 0:
-            train_set_x_with_distortion = theano.shared(np.asarray(create_distortion_dataset(), dtype=theano.config.floatX))
+            train_set_x_with_distortion = theano.shared(np.asarray(np.load("distort/"+ str(np.random.randint(1,len(os.walk('distort').next()[2]))) +".npy"), dtype=theano.config.floatX))
             train_model_distortion = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
                     updates=updates,
                     givens={
@@ -498,7 +495,7 @@ def test_committee_machine(
             outputs=classifier.results(),
             givens={ x: test_set_x[index * batch_size:(index + 1) * batch_size]} )                
                 
-        train_losses = [train_error_model(i) for i in xrange(n_valid_batches)]
+        train_losses = [train_error_model(i) for i in xrange(n_train_batches)]
         validation_losses = [validate_error_model(i) for i in xrange(n_valid_batches)]
         test_losses = [test_error_model(i) for i in xrange(n_test_batches)]
         train_errors = int(np.sum(train_losses))
@@ -715,18 +712,19 @@ def test_dark_knowledge(
     write_on_file_and_console('...Moving Dark Knowledge from CPU to GPU',results_file_validation)
         
     final_output = []
-    for i in range(0,len(train_outputs[0])):
-        outputs = []
-        for output in train_outputs:
-            outputs.append(output[i])
-        outputs = np.dstack(outputs)[0]
-        step_final_output = []
-        for j in range(0,len(outputs)):
-            step_final_output.append(mean(outputs[j]))
-        final_output.append(step_final_output)
-    final_output = np.vstack(final_output)
-    
-    final_output = theano.shared(final_output)
+    if model_counter > 0:
+        for i in range(0,len(train_outputs[0])):
+            outputs = []
+            for output in train_outputs:
+                outputs.append(output[i])
+            outputs = np.dstack(outputs)[0]
+            step_final_output = []
+            for j in range(0,len(outputs)):
+                step_final_output.append(mean(outputs[j]))
+            final_output.append(step_final_output)
+        final_output = np.vstack(final_output)
+        
+        final_output = theano.shared(final_output)
         
     ######################
     # BUILD ACTUAL MODEL #
@@ -750,8 +748,8 @@ def test_dark_knowledge(
                      temperature=temperature,
                      alpha=alpha)
 
-    cost = classifier.dark_negative_log_likelihood(dark_y, y)
-    dropout_cost = classifier.dark_dropout_negative_log_likelihood(dark_y, y)
+    cost = classifier.dark_negative_log_likelihood(dark_y, y) if model_counter > 0 else classifier.negative_log_likelihood(y)
+    dropout_cost = classifier.dark_dropout_negative_log_likelihood(dark_y, y) if model_counter > 0 else classifier.dropout_negative_log_likelihood(y)
 
     test_model = theano.function(inputs=[index],
             outputs=classifier.errors(y),
@@ -793,12 +791,20 @@ def test_dark_knowledge(
             updates[param] = stepped_param
 
     output = dropout_cost if dropout else cost
-    train_model = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
-            updates=updates,
-            givens={
-                x: train_set_x[index * batch_size:(index + 1) * batch_size],
-                y: train_set_y[index * batch_size:(index + 1) * batch_size],
-                dark_y: final_output[index * batch_size:(index + 1) * batch_size]})
+    train_model = None
+    if model_counter > 0:
+        train_model = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
+                updates=updates,
+                givens={
+                    x: train_set_x[index * batch_size:(index + 1) * batch_size],
+                    y: train_set_y[index * batch_size:(index + 1) * batch_size],
+                    dark_y: final_output[index * batch_size:(index + 1) * batch_size]})
+    else:
+        train_model = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
+                updates=updates,
+                givens={
+                    x: train_set_x[index * batch_size:(index + 1) * batch_size],
+                    y: train_set_y[index * batch_size:(index + 1) * batch_size]})
 
     decay_learning_rate = theano.function(inputs=[], outputs=learning_rate,
             updates={learning_rate: learning_rate * learning_rate_decay})
@@ -830,26 +836,15 @@ def test_dark_knowledge(
         n_epochs = original_epochs
         
         while epoch_counter < n_epochs and this_validation_errors > 0:
-            train_set_x_with_distortion = theano.shared(np.asarray(create_distortion_dataset(), dtype=theano.config.floatX))            
-            train_model_distortion = theano.function(inputs=[epoch, index], outputs=[classifier.errors(y), output],
-                updates=updates,
-                givens={
-                    x: train_set_x_with_distortion[index * batch_size:(index + 1) * batch_size],
-                    y: train_set_y[index * batch_size:(index + 1) * batch_size],
-                    dark_y: final_output[index * batch_size:(index + 1) * batch_size]})             
-            
             epoch_counter = epoch_counter + 1
-            train_distort_output = [train_model_distortion(epoch_counter, i) for i in xrange(1, (n_train_batches/n_matches)*match)]
             train_output = [train_model(epoch_counter, i) for i in xrange(1, (n_train_batches/n_matches)*match)]
             
-            train_distort_losses = [train_distort_output[i][0] for i in xrange(len(train_distort_output))]
-            train_distort_cost = [train_distort_output[i][1] for i in xrange(len(train_distort_output))]
             train_losses = [train_output[i][0] for i in xrange(len(train_output))]
             train_cost = [train_output[i][1] for i in xrange(len(train_output))]
             
-            this_train_cost = np.sum((train_cost, train_distort_cost))
-            this_train_errors = np.sum((train_losses, train_distort_losses))
-            this_train_score = np.mean((train_losses, train_distort_losses))
+            this_train_cost = np.sum(train_cost)
+            this_train_errors = np.sum(train_losses)
+            this_train_score = np.mean(train_losses)
 
             write_on_file_and_console("match {} epoch {}, train cost {}".format(
                     match, epoch_counter, this_train_cost),results_file_train)
@@ -918,19 +913,19 @@ if __name__ == '__main__':
     names = []
     attempts = 0
 
-    while errors > 23:
+    while errors > 0:
         initial_learning_rate = 1.0
         
         learning_rate_decay = 0.999
         squared_filter_length_limit = 15.0
-        n_epochs = 300
+        n_epochs = 200
         n_matches = 1
         patient = n_epochs*0.75
         batch_size = 100
 
-        layer_sizes = [ 28*28, 2500, 2000, 1500, 1000, 500, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5, 0.5, 0.5, 0.5 ]
-        activations = [ ReLU, ReLU, ReLU, ReLU, ReLU ]
+        layer_sizes = [ 28*28, 1200, 1200, 10 ]
+        dropout_rates = [ 0.2, 0.5, 0.5 ]
+        activations = [ ReLU, ReLU ]
         dropout = True
         use_bias = True
         mom_start = 0.5
@@ -941,6 +936,7 @@ if __name__ == '__main__':
                       "interval": mom_epoch_interval}                  
         dataset = 'data/mnist_batches.npz'
         datasets = load_mnist(dataset)
+        random_seed = np.random.randint(1,9999)
         
         attempts += 1
 
@@ -963,7 +959,7 @@ if __name__ == '__main__':
                  datasets=datasets,
                  results_file_name=results_file_name,
                  use_bias=use_bias,
-                 random_seed=np.random.randint(1,9999))
+                 random_seed=random_seed)
         
         network = [params, layer_sizes, dropout_rates, activations]
         networks.append(network)
@@ -975,114 +971,46 @@ if __name__ == '__main__':
             datasets=datasets,
             networks=networks,        
             results_file_name=results_file_name,
-            use_bias=use_bias)
+            use_bias=use_bias,
+            random_seed=random_seed)
 
         results_file = open('resultsFinal.txt', 'wb')
         for name in names:
             write_on_file_and_console(name,results_file)
     
-        random_seed = np.random.randint(1,9999)
-        temperature = ((attempts % 10) + 1)/10.
+        
+        temperature = ((attempts % 10) + 1)
         alpha = 0.9
         
-        layer_sizes = [ 28*28, 1200, 1200, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5 ]
-        activations = [ ReLU, ReLU ]
-        results_file_name = "Original" + str(attempts) + "_1200_1200.txt"
-        original_800_800 = test_mlp(initial_learning_rate=initial_learning_rate,
-                 learning_rate_decay=learning_rate_decay,
-                 squared_filter_length_limit=squared_filter_length_limit,
-                 n_epochs=n_epochs,
-                 n_matches=n_matches,
-                 patient=patient,
-                 batch_size=batch_size,
-                 layer_sizes=layer_sizes,
-                 mom_params=mom_params,
-                 activations=activations,
-                 dropout=dropout,
-                 dropout_rates=dropout_rates,
-                 datasets=datasets,
-                 results_file_name=results_file_name,
-                 use_bias=use_bias,
-                 random_seed=random_seed)
-        
-        layer_sizes = [ 28*28, 1200, 1200, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5 ]
+        layer_sizes = [ 28*28, 800, 800, 10 ]
+        dropout_rates = [ 0.0, 0.0, 0.0 ]
         activations = [ ReLU, ReLU ]
         mean=Geometric_mean
-        results_file_name = "Dark_geometric" + str(attempts) + "_1200_1200.txt"    
-        test_dark_knowledge(
-            networks=networks,
-            mean=mean,
-            initial_learning_rate=initial_learning_rate,
-            learning_rate_decay=learning_rate_decay,
-            squared_filter_length_limit=squared_filter_length_limit,
-            n_epochs=n_epochs,
-            n_matches=n_matches,
-            patient=patient,
-            batch_size=batch_size,
-            mom_params=mom_params,
-            activations=activations,
-            dropout=dropout,
-            dropout_rates=dropout_rates,
-            results_file_name=results_file_name,
-            layer_sizes=layer_sizes,
-            datasets=datasets,
-            use_bias=use_bias,
-            temperature=temperature,
-            alpha=alpha,
-            random_seed=random_seed)
-            
-        layer_sizes = [ 28*28, 1200, 1200, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5 ]
-        activations = [ ReLU, ReLU ]
-        mean=Average
-        results_file_name = "Dark_average" + str(attempts) + "_1200_1200.txt"
-        test_dark_knowledge(
-            networks=networks,
-            mean=mean,
-            initial_learning_rate=initial_learning_rate,
-            learning_rate_decay=learning_rate_decay,
-            squared_filter_length_limit=squared_filter_length_limit,
-            n_epochs=n_epochs,
-            n_matches=n_matches,
-            patient=patient,
-            batch_size=batch_size,
-            mom_params=mom_params,
-            activations=activations,
-            dropout=dropout,
-            dropout_rates=dropout_rates,
-            results_file_name=results_file_name,
-            layer_sizes=layer_sizes,
-            datasets=datasets,
-            use_bias=use_bias,
-            temperature=temperature,
-            alpha=alpha,
-            random_seed=random_seed)
-
-        layer_sizes = [ 28*28, 800, 800, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5 ]
-        activations = [ ReLU, ReLU ]
         results_file_name = "Original" + str(attempts) + "_800_800.txt"
-        original_800_800 = test_mlp(initial_learning_rate=initial_learning_rate,
-                 learning_rate_decay=learning_rate_decay,
-                 squared_filter_length_limit=squared_filter_length_limit,
-                 n_epochs=n_epochs,
-                 n_matches=n_matches,
-                 patient=patient,
-                 batch_size=batch_size,
-                 layer_sizes=layer_sizes,
-                 mom_params=mom_params,
-                 activations=activations,
-                 dropout=dropout,
-                 dropout_rates=dropout_rates,
-                 datasets=datasets,
-                 results_file_name=results_file_name,
-                 use_bias=use_bias,
-                 random_seed=random_seed)
+        test_dark_knowledge(
+            networks=[],
+            mean=mean,
+            initial_learning_rate=initial_learning_rate,
+            learning_rate_decay=learning_rate_decay,
+            squared_filter_length_limit=squared_filter_length_limit,
+            n_epochs=n_epochs,
+            n_matches=n_matches,
+            patient=patient,
+            batch_size=batch_size,
+            mom_params=mom_params,
+            activations=activations,
+            dropout=dropout,
+            dropout_rates=dropout_rates,
+            results_file_name=results_file_name,
+            layer_sizes=layer_sizes,
+            datasets=datasets,
+            use_bias=use_bias,
+            temperature=1,
+            alpha=0.0,
+            random_seed=random_seed)
         
         layer_sizes = [ 28*28, 800, 800, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5 ]
+        dropout_rates = [ 0.0, 0.0, 0.0 ]
         activations = [ ReLU, ReLU ]
         mean=Geometric_mean
         results_file_name = "Dark_geometric" + str(attempts) + "_800_800.txt"    
@@ -1109,7 +1037,7 @@ if __name__ == '__main__':
             random_seed=random_seed)
             
         layer_sizes = [ 28*28, 800, 800, 10 ]
-        dropout_rates = [ 0.2, 0.5, 0.5 ]
+        dropout_rates = [ 0.0, 0.0, 0.0 ]
         activations = [ ReLU, ReLU ]
         mean=Average
         results_file_name = "Dark_average" + str(attempts) + "_800_800.txt"
@@ -1136,28 +1064,33 @@ if __name__ == '__main__':
             random_seed=random_seed)
             
         layer_sizes = [ 28*28, 1200, 10 ]
-        dropout_rates = [ 0.2, 0.5]
+        dropout_rates = [ 0.0, 0.0]
         activations = [ ReLU ]
         results_file_name = "Original" + str(attempts) + "_1200.txt"
-        original_1200 = test_mlp(initial_learning_rate=initial_learning_rate,
-                 learning_rate_decay=learning_rate_decay,
-                 squared_filter_length_limit=squared_filter_length_limit,
-                 n_epochs=n_epochs,
-                 n_matches=n_matches,
-                 patient=patient,
-                 batch_size=batch_size,
-                 layer_sizes=layer_sizes,
-                 mom_params=mom_params,
-                 activations=activations,
-                 dropout=dropout,
-                 dropout_rates=dropout_rates,
-                 datasets=datasets,
-                 results_file_name=results_file_name,
-                 use_bias=use_bias,
-                 random_seed=random_seed)
+        test_dark_knowledge(
+            networks=[],
+            mean=mean,
+            initial_learning_rate=initial_learning_rate,
+            learning_rate_decay=learning_rate_decay,
+            squared_filter_length_limit=squared_filter_length_limit,
+            n_epochs=n_epochs,
+            n_matches=n_matches,
+            patient=patient,
+            batch_size=batch_size,
+            mom_params=mom_params,
+            activations=activations,
+            dropout=dropout,
+            dropout_rates=dropout_rates,
+            results_file_name=results_file_name,
+            layer_sizes=layer_sizes,
+            datasets=datasets,
+            use_bias=use_bias,
+            temperature=1,
+            alpha=0.0,
+            random_seed=random_seed)
             
         layer_sizes = [ 28*28, 1200, 10 ]
-        dropout_rates = [ 0.2, 0.5 ]
+        dropout_rates = [ 0.0, 0.0 ]
         activations = [ ReLU ]
         mean=Geometric_mean
         results_file_name = "Dark_geometric" + str(attempts) + "_1200.txt"
@@ -1184,7 +1117,7 @@ if __name__ == '__main__':
             random_seed=random_seed)
             
         layer_sizes = [ 28*28, 1200, 10 ]
-        dropout_rates = [ 0.2, 0.5 ]
+        dropout_rates = [ 0.0, 0.0 ]
         activations = [ ReLU ]
         mean=Average
         results_file_name = "Dark_average" + str(attempts) + "_1200.txt"
@@ -1211,28 +1144,33 @@ if __name__ == '__main__':
             random_seed=random_seed)
             
         layer_sizes = [ 28*28, 800, 10 ]
-        dropout_rates = [ 0.2, 0.5]
+        dropout_rates = [ 0.0, 0.0]
         activations = [ ReLU ]
         results_file_name = "Original" + str(attempts) + "_800.txt"
-        original_800 = test_mlp(initial_learning_rate=initial_learning_rate,
-                 learning_rate_decay=learning_rate_decay,
-                 squared_filter_length_limit=squared_filter_length_limit,
-                 n_epochs=n_epochs,
-                 n_matches=n_matches,
-                 patient=patient,
-                 batch_size=batch_size,
-                 layer_sizes=layer_sizes,
-                 mom_params=mom_params,
-                 activations=activations,
-                 dropout=dropout,
-                 dropout_rates=dropout_rates,
-                 datasets=datasets,
-                 results_file_name=results_file_name,
-                 use_bias=use_bias,
-                 random_seed=random_seed)
+        test_dark_knowledge(
+            networks=[],
+            mean=mean,
+            initial_learning_rate=initial_learning_rate,
+            learning_rate_decay=learning_rate_decay,
+            squared_filter_length_limit=squared_filter_length_limit,
+            n_epochs=n_epochs,
+            n_matches=n_matches,
+            patient=patient,
+            batch_size=batch_size,
+            mom_params=mom_params,
+            activations=activations,
+            dropout=dropout,
+            dropout_rates=dropout_rates,
+            results_file_name=results_file_name,
+            layer_sizes=layer_sizes,
+            datasets=datasets,
+            use_bias=use_bias,
+            temperature=1,
+            alpha=0.0,
+            random_seed=random_seed)
             
         layer_sizes = [ 28*28, 800, 10 ]
-        dropout_rates = [ 0.2, 0.5 ]
+        dropout_rates = [ 0.0, 0.0 ]
         activations = [ ReLU ]
         mean=Geometric_mean
         results_file_name = "Dark_geometric" + str(attempts) + "_800.txt"
@@ -1259,7 +1197,7 @@ if __name__ == '__main__':
             random_seed=random_seed)
             
         layer_sizes = [ 28*28, 800, 10 ]
-        dropout_rates = [ 0.2, 0.5 ]
+        dropout_rates = [ 0.0, 0.0 ]
         activations = [ ReLU ]
         mean=Average
         results_file_name = "Dark_average" + str(attempts) + "_800.txt"

@@ -13,19 +13,18 @@ def elastic_distortion(input, x):
 def create_distortion_dataset():
     dataset = 'data/mnist_batches.npz'
     epoch = len(os.walk('distort').next()[2]) + 1
-    epoch = epoch if epoch <= 3 else np.random.randint(1,3)
+    epoch = epoch if epoch <= 6 else np.random.randint(1,6)
     
     mnist = np.load(dataset)
     train_set_x = mnist['train_data']
     mnist = None
     for i in xrange(len(train_set_x)):
         train_set_x[i] = elastic_distortion(input=train_set_x[i], x=np.random.choice(9, 1, p=[0.03, 0.03, 0.04, 0.1, 0.1, 0.1, 0.2, 0.2, 0.2])[0])
-        #train_set_x[i] = elastic_distortion(input=train_set_x[i], x=epoch)
         print "image" + str(i)
     
     np.save("distort/" + str(epoch), train_set_x)
     print epoch
-    epoch = epoch + 1 if epoch < 3 else 1
+    epoch = epoch + 1 if epoch < 6 else 1
     #Image.fromarray(np.array(np.split(np.array(train_set_x[np.random.randint(1,len(train_set_x))])*255,28))).show()
 
 if __name__ == '__main__':
